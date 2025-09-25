@@ -19,6 +19,14 @@
     <script src="./private/config.js"></script>
     <script src="./private/uploader.js"></script>
     <script src="./CHEM112 SRP Study V3.js" type="module"></script>
+    <script>
+window.CHEM112_CONFIG = {
+  ENDPOINT: 'node', // 'node' just means "JSON POST"; set URL explicitly below
+  ENDPOINTS: { node: 'https://queenschem112srp.com/api/ingest' },
+  REQUIRE_DIGITS: 8,
+  ALLOWED_WEEKS: [4,5,6,7,8,10]
+};
+</script>
     <!-- legacy browsers -->
     <script src="./lib/psychojs-2025.1.1.iife.js" nomodule></script>
     <script src="./CHEM112 SRP Study V3-legacy-browsers.js" nomodule></script>
