@@ -202,7 +202,7 @@ if (window.CHEM112_PRIVATE) window.CHEM112_PRIVATE.patchExperiment(psychoJS);
 
 // open window:
 psychoJS.openWindow({
-  fullscr: true,
+  fullscr: false,
   color: new util.Color([0,0,0]),
   units: 'height',
   waitBlanking: true,
@@ -373,7 +373,7 @@ async function experimentInit() {
   introText = new visual.TextStim({
     win: psychoJS.window,
     name: 'introText',
-    text: 'Welcome to the Spaced Retrieval Practice Study!\nYou will be given a set of questions, please answer to the best of your ability. Once you have finished typing, press [Enter] to submit.\nFeedback for a Correct or Incorrect Answer will be shown for 10 seconds, afterwards the new question will show.\nIf you are ready, press [Space] or tap Start to begin.',
+    text: 'Welcome to the Spaced Retrieval Practice Study!\nYou will be given a set of questions, please answer to the best of your ability.\nOnce you have finished typing, press [Enter] to submit.\nFeedback for a Correct or Incorrect Answer will be shown for 10 seconds, afterwards the new question will show.\nIf you are ready, press [Space] or tap Start to begin.',
     font: 'Arial',
     units: undefined, 
     pos: [0, 0], draggable: false, height: 0.05,  wrapWidth: undefined, ori: 0.0,
