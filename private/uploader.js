@@ -2,7 +2,7 @@
 // Minimal uploader & CSV builder for CHEM112 (improved fallback)
 (function(){
   const cfg = window.CHEM112_CONFIG || {};
-  const DEBUG = false; // set true to see logs in console
+  const DEBUG = true; // set true to see logs in console
 
   const state = {
     currentRow: {},
