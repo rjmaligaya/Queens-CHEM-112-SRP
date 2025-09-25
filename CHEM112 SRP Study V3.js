@@ -1682,16 +1682,26 @@ function importConditions(currentLoop) {
     };
 }
 
-async function quitPsychoJS(message, isCompleted) {
+function quitPsychoJS(message, isCompleted) {
   try {
-    if (window.CHEM112_PRIVATE) { await window.CHEM112_PRIVATE.onQuitUploadIfCompleted(psychoJS, isCompleted); }
-  } catch(e) { console.warn('[CHEM112] onQuitUploadIfCompleted warn:', e); }
-  // Check for and save orphaned data
-  if (psychoJS.experiment.isEntryEmpty()) {
-    psychoJS.experiment.nextEntry();
+    // Build file name: CHEM112 SRP_studentNumber_week_date.csv
+    const info = (typeof expInfo !== "undefined" && expInfo) ? expInfo : (psychoJS?.experiment?._experimentInfo || {});
+    const student = (info.participant || info.Participant || "").toString().trim();
+    const week = (info.week || info.Week || info.weekNumber || "").toString().trim();
+    const today = new Date().toISOString().slice(0,10); // YYYY-MM-DD
+    const filename = `CHEM112 SRP_${student}_${week}_${today}.csv`;
+
+    // Use SAME csv text for local download and upload to Worker
+    if (window.CHEM112_PRIVATE?.onQuitUploadIfCompleted) {
+      window.CHEM112_PRIVATE.onQuitUploadIfCompleted(psychoJS, !!isCompleted, filename);
+    }
+  } catch (e) {
+    console.error("[CHEM112] quit hook error:", e);
   }
-  psychoJS.window.close();
-  psychoJS.quit({message: message, isCompleted: isCompleted});
-  
+
+  // Close like usual
+  try { psychoJS.window.close(); } catch(e) {}
+  psychoJS.quit({ message, isCompleted });
   return Scheduler.Event.QUIT;
 }
+
