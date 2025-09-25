@@ -172,6 +172,8 @@
 })();
 
 // ===== CHEM112 unified CSV upload/download helpers (append to end of uploader.js) =====
+console.log("[CHEM112] helpers loading...");
+
 async function buildCsvText(psychoJS) {
   if (window.CHEM112_PRIVATE?.rows?.length) {
     const txt = window.CHEM112_PRIVATE.rows.join("\n");
@@ -208,7 +210,7 @@ async function uploadCsv(csvText, filename) {
                    "https://queenschem112srp.com/api/ingest";
   const body = { filename, data: csvText, contentType: "text/csv" };
   const bytes = new TextEncoder().encode(csvText).length;
-  console.log("[CHEM112] uploadCsv", { filename, bytes, preview: csvText.slice(0,120).replace(/\n/g,"\\n") });
+  console.log("[CHEM112] uploadCsv →", { filename, bytes, preview: csvText.slice(0,120).replace(/\n/g,"\\n") });
   const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -221,6 +223,7 @@ async function uploadCsv(csvText, filename) {
 
 window.CHEM112_PRIVATE = window.CHEM112_PRIVATE || {};
 window.CHEM112_PRIVATE.onQuitUploadIfCompleted = async function(psychoJS, isCompleted, filename) {
+  console.log("[CHEM112] quit hook fired; isCompleted =", isCompleted, "filename =", filename);
   try {
     if (!isCompleted) return;
     const csvText = await buildCsvText(psychoJS);   // build ONCE
@@ -232,3 +235,5 @@ window.CHEM112_PRIVATE.onQuitUploadIfCompleted = async function(psychoJS, isComp
     console.error("[CHEM112] onQuitUploadIfCompleted error:", e);
   }
 };
+
+console.log("[CHEM112] helpers loaded.");
