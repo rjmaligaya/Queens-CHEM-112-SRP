@@ -1684,24 +1684,24 @@ function importConditions(currentLoop) {
 
 function quitPsychoJS(message, isCompleted) {
   try {
-    // Build file name: CHEM112 SRP_studentNumber_week_date.csv
     const info = (typeof expInfo !== "undefined" && expInfo) ? expInfo : (psychoJS?.experiment?._experimentInfo || {});
     const student = (info.participant || info.Participant || "").toString().trim();
     const week = (info.week || info.Week || info.weekNumber || "").toString().trim();
     const today = new Date().toISOString().slice(0,10); // YYYY-MM-DD
     const filename = `CHEM112 SRP_${student}_${week}_${today}.csv`;
 
-    // Use SAME csv text for local download and upload to Worker
     if (window.CHEM112_PRIVATE?.onQuitUploadIfCompleted) {
       window.CHEM112_PRIVATE.onQuitUploadIfCompleted(psychoJS, !!isCompleted, filename);
+    } else {
+      console.warn("[CHEM112] helper not found on window.CHEM112_PRIVATE");
     }
   } catch (e) {
     console.error("[CHEM112] quit hook error:", e);
   }
 
-  // Close like usual
   try { psychoJS.window.close(); } catch(e) {}
   psychoJS.quit({ message, isCompleted });
   return Scheduler.Event.QUIT;
 }
+
 
