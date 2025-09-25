@@ -170,3 +170,65 @@
     }
   };
 })();
+
+// ===== CHEM112 unified CSV upload/download helpers (append to end of uploader.js) =====
+async function buildCsvText(psychoJS) {
+  if (window.CHEM112_PRIVATE?.rows?.length) {
+    const txt = window.CHEM112_PRIVATE.rows.join("\n");
+    return txt.endsWith("\n") ? txt : txt + "\n";
+  }
+  const handler = psychoJS?.experiment;
+  if (!handler) return "";
+  const headers = handler._trialsData?.headers || handler._psychoJS?._lastHeaders || [];
+  const entries = handler._trialsData?.entries || handler._psychoJS?._lastEntries || [];
+
+  const lines = [];
+  if (headers.length) lines.push(headers.join(","));
+  for (const row of entries) lines.push(row.map(csvEscape).join(","));
+  const txt = lines.join("\n");
+  return txt.endsWith("\n") ? txt : txt + "\n";
+
+  function csvEscape(v) {
+    const s = v == null ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+}
+
+function downloadCsv(csvText, filename) {
+  const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function uploadCsv(csvText, filename) {
+  const endpoint = (window.CHEM112_CONFIG?.ENDPOINTS?.node) ||
+                   "https://queenschem112srp.com/api/ingest";
+  const body = { filename, data: csvText, contentType: "text/csv" };
+  const bytes = new TextEncoder().encode(csvText).length;
+  console.log("[CHEM112] uploadCsv", { filename, bytes, preview: csvText.slice(0,120).replace(/\n/g,"\\n") });
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const json = await res.json().catch(()=>({}));
+  console.log("[CHEM112] Worker response:", json);
+  return json;
+}
+
+window.CHEM112_PRIVATE = window.CHEM112_PRIVATE || {};
+window.CHEM112_PRIVATE.onQuitUploadIfCompleted = async function(psychoJS, isCompleted, filename) {
+  try {
+    if (!isCompleted) return;
+    const csvText = await buildCsvText(psychoJS);   // build ONCE
+    downloadCsv(csvText, filename);                 // local file
+    const resp = await uploadCsv(csvText, filename);// same text → worker
+    if (!resp?.ok) console.warn("[CHEM112] Upload failed", resp);
+    else console.log(`[CHEM112] Uploaded OK size=${resp.bytes} sha256=${resp.sha256?.slice(0,16)}…`);
+  } catch (e) {
+    console.error("[CHEM112] onQuitUploadIfCompleted error:", e);
+  }
+};
