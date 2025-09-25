@@ -1,12 +1,18 @@
-// Minimal uploader & CSV builder that monkey-patches PsychoJS ExperimentHandler
+
+// Minimal uploader & CSV builder for CHEM112 (improved fallback)
 (function(){
   const cfg = window.CHEM112_CONFIG || {};
+  const DEBUG = false; // set true to see logs in console
+
   const state = {
     currentRow: {},
     rows: [],
-    columns: [],   // first-seen order
+    columns: [],
     expInfo: null
   };
+
+  function log(...args){ if (DEBUG) console.log('[CHEM112]', ...args); }
+  function warn(...args){ if (DEBUG) console.warn('[CHEM112]', ...args); }
 
   function addColumn(key){
     if (!state.columns.includes(key)) state.columns.push(key);
@@ -17,17 +23,14 @@
     state.currentRow[key] = (value === undefined || value === null) ? '' : String(value);
   }
 
-  // Resolve endpoint based on config and host
   function resolveEndpoint(){
     const choice = (cfg.ENDPOINT || 'auto').toLowerCase();
     if (choice === 'node')   return cfg.ENDPOINTS.node;
     if (choice === 'php')    return cfg.ENDPOINTS.php;
     if (choice === 'netlify')return cfg.ENDPOINTS.netlify;
-    // auto: try node first, then php, then netlify (client will just POST; server availability is deployment-dependent)
-    return cfg.ENDPOINTS.node;
+    return cfg.ENDPOINTS?.node || '/api/ingest';
   }
 
-  // Construct CSV text with stable column order
   function buildCSV(){
     // Ensure student/week are included
     if (state.expInfo){
@@ -37,7 +40,6 @@
     const header = state.columns.join(',');
     const lines = [header];
     for (const r of state.rows){
-      // Merge expInfo augmentation
       let row = {...r};
       if (state.expInfo){
         row['Student Number'] = state.expInfo.studentNumber;
@@ -46,7 +48,6 @@
       const values = state.columns.map(k => {
         let v = row[k];
         if (v === undefined || v === null) v = '';
-        // Escape CSV
         v = String(v);
         if (/[",\n]/.test(v)) v = '"' + v.replace(/"/g,'""') + '"';
         return v;
@@ -72,7 +73,35 @@
     return res.json().catch(()=>({ok:true}));
   }
 
-  // Public API exposed for the module script to call
+  // Try to salvage rows if nextEntry wasn't called by the experiment
+  function salvageFromExperiment(psychoJS){
+    try {
+      const exp = psychoJS?.experiment;
+      if (!exp) return false;
+
+      // Common internal buffers in PsychoJS
+      const maybeRows = exp._trialsData || exp.trialList || null;
+      if (Array.isArray(maybeRows) && maybeRows.length){
+        log('Salvaging from internal trials array:', maybeRows.length);
+        for (const r of maybeRows){
+          if (r && typeof r === 'object'){
+            for (const [k,v] of Object.entries(r)){ addColumn(k); }
+            state.rows.push({...r});
+          }
+        }
+        return state.rows.length > 0;
+      }
+
+      if (Object.keys(state.currentRow).length){
+        log('Salvaging from currentRow (single row).');
+        state.rows.push({...state.currentRow});
+        state.currentRow = {};
+        return true;
+      }
+    } catch(e){ warn('salvage warn:', e); }
+    return false;
+  }
+
   window.CHEM112_PRIVATE = {
     patchExperiment(psychoJS){
       const exp = psychoJS.experiment;
@@ -83,41 +112,47 @@
       const origNext = exp.nextEntry.bind(exp);
 
       exp.addData = function(key, val){
-        try { setCell(key, val); } catch(e){ console.warn('[CHEM112] addData patch warn:', e); }
+        try { setCell(key, val); } catch(e){ warn('addData patch warn:', e); }
         return origAdd(key, val);
       };
 
       exp.nextEntry = function(){
         try {
-          // finalize current row
-          const snapshot = {...state.currentRow};
-          state.rows.push(snapshot);
-          state.currentRow = {};
-        } catch(e){ console.warn('[CHEM112] nextEntry patch warn:', e); }
+          if (Object.keys(state.currentRow).length){
+            const snapshot = {...state.currentRow};
+            state.rows.push(snapshot);
+            state.currentRow = {};
+          }
+        } catch(e){ warn('nextEntry patch warn:', e); }
         return origNext();
       };
 
-      console.log('[CHEM112] ExperimentHandler patched for private upload.');
+      log('ExperimentHandler patched.');
     },
 
     setExpInfo(studentNumber, week){
       state.expInfo = { studentNumber, week };
+      log('Set expInfo:', state.expInfo);
     },
 
     async onQuitUploadIfCompleted(psychoJS, isCompleted){
-      if (!isCompleted) return;
-      // Validate fields
+      if (!isCompleted) { log('Not completed; skip upload.'); return; }
+
       const sn = (state.expInfo?.studentNumber || '').trim();
       const wk = String(state.expInfo?.week || '').trim();
       const digits = (cfg.REQUIRE_DIGITS|0) || 8;
       if (!/^\d+$/.test(sn) || sn.length !== digits){
-        console.warn('[CHEM112] Not uploading: invalid student number.');
+        warn('Invalid student number; skip upload.');
         return;
       }
       if (!cfg.ALLOWED_WEEKS || !cfg.ALLOWED_WEEKS.map(String).includes(wk)){
-        console.warn('[CHEM112] Not uploading: invalid week.');
+        warn('Invalid week; skip upload.');
         return;
       }
+
+      // If we never saw nextEntry, salvage what we can
+      if (state.rows.length === 0) { salvageFromExperiment(psychoJS); }
+
       const csv = buildCSV();
       const today = new Date();
       const yyyy = today.getFullYear();
@@ -125,11 +160,12 @@
       const dd = String(today.getDate()).padStart(2,'0');
       const filename = `CHEM112 SRP_${sn}_${wk}_${yyyy}-${mm}-${dd}.csv`;
 
+      log('Uploading:', filename, 'rows:', state.rows.length, 'cols:', state.columns.length);
       try {
         await postCSV(filename, csv);
-        console.log('[CHEM112] Upload success:', filename);
+        log('Upload success.');
       } catch(err){
-        console.error('[CHEM112] Upload failed:', err);
+        warn('Upload failed:', err);
       }
     }
   };
