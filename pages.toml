@@ -3,4 +3,4 @@ name = "queens-chem-112-srp"
 # Bind R2 bucket as DATA_BUCKET for Pages Functions
 [r2_buckets]
 binding = "DATA_BUCKET"     # Appears in env.DATA_BUCKET inside functions
-bucket_name = "srp-results" # <-- CHANGE to your actual bucket name if different
+bucket_name = "chem112-data" # <-- CHANGE to your actual bucket name if different
