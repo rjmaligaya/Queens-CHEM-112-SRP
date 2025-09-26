@@ -1,13 +1,11 @@
-// Private hosting configuration
+// private/config.js
+// Site-wide configuration for CHEM112 SRP (overridable by environment if needed)
 window.CHEM112_CONFIG = {
-  ALLOWED_WEEKS: [4,5,6,7,8,10],
+  // Functions endpoint (relative to domain)
+  INGEST_URL: "/api/ingest",
+  // Validation
   REQUIRE_DIGITS: 8,
-  // Choose one of: 'auto', 'node', 'php', 'netlify'
-  ENDPOINT: 'auto',
-  // Endpoints map
-  ENDPOINTS: {
-    node: '/api/ingest',         // Node/Express server
-    php:  '/upload.php',          // PHP upload
-    netlify: '/.netlify/functions/ingest' // Netlify function
-  }
+  ALLOWED_WEEKS: [4,5,6,7,8,10],
+  // Upload policy
+  UPLOAD_ON_QUIT: true
 };
