@@ -351,6 +351,34 @@ async function updateInfo() {
 }
 
 async function experimentInit() {
+
+  // --- CHEM112: Wrap addData/nextEntry to reliably build session rows for uploader ---
+  try {
+    if (!window.CHEM112_ROWS) window.CHEM112_ROWS = [];
+    let _currentRow = {};
+    const _origAddData = psychoJS.experiment.addData.bind(psychoJS.experiment);
+    psychoJS.experiment.addData = function(key, value) {
+      _currentRow[key] = value;
+      return _origAddData(key, value);
+    };
+    const _origNextEntry = psychoJS.experiment.nextEntry.bind(psychoJS.experiment);
+    psychoJS.experiment.nextEntry = function() {
+      // Only commit non-empty rows
+      if (Object.keys(_currentRow).length > 0) {
+        window.CHEM112_ROWS.push(_currentRow);
+        _currentRow = {};
+      }
+      return _origNextEntry();
+    };
+    // Also ensure a final commit on quit:
+    window.addEventListener('beforeunload', () => {
+      if (Object.keys(_currentRow).length > 0) {
+        window.CHEM112_ROWS.push(_currentRow);
+        _currentRow = {};
+      }
+    });
+  } catch(e) { console.warn('[CHEM112] failed to wrap addData/nextEntry', e); }
+  // -------------------------------------------------------------------------------
   // Initialize components for Routine "Intro"
   IntroClock = new util.Clock();
   introText = new visual.TextStim({
@@ -873,9 +901,7 @@ function dynamicLoopLoopEndIteration(scheduler, snapshot) {
   return async function () {
     if (typeof snapshot !== 'undefined') {
       if (snapshot.finished) {
-        if (psychoJS.experiment.isEntryEmpty()) {
-          psychoJS.experiment.nextEntry(snapshot);
-        }
+        if (!psychoJS.experiment.isEntryEmpty()) { psychoJS.experiment.nextEntry(snapshot); }
         scheduler.stop();
       } else {
         psychoJS.experiment.nextEntry(snapshot);
@@ -893,9 +919,7 @@ function attemptLoopLoopEndIteration(scheduler, snapshot) {
       // ------Check if user ended loop early------
       if (snapshot.finished) {
         // Check for and save orphaned data
-        if (psychoJS.experiment.isEntryEmpty()) {
-          psychoJS.experiment.nextEntry(snapshot);
-        }
+        if (!psychoJS.experiment.isEntryEmpty()) { psychoJS.experiment.nextEntry(snapshot); }
         scheduler.stop();
       } else {
         psychoJS.experiment.nextEntry(snapshot);
@@ -923,9 +947,7 @@ function trialsLoopLoopEndIteration(scheduler, snapshot) {
       // ------Check if user ended loop early------
       if (snapshot.finished) {
         // Check for and save orphaned data
-        if (psychoJS.experiment.isEntryEmpty()) {
-          psychoJS.experiment.nextEntry(snapshot);
-        }
+        if (!psychoJS.experiment.isEntryEmpty()) { psychoJS.experiment.nextEntry(snapshot); }
         scheduler.stop();
       } else {
         psychoJS.experiment.nextEntry(snapshot);
@@ -1667,12 +1689,10 @@ function importConditions(currentLoop) {
 
 async function quitPsychoJS(message, isCompleted) {
   try {
-    if (window.CHEM112_PRIVATE) { await window.CHEM112_PRIVATE.onQuitUploadIfCompleted(psychoJS, isCompleted); }
+    if (window.CHEM112_PRIVATE && typeof window.CHEM112_PRIVATE.onQuitUploadIfCompleted === 'function') { await (window.CHEM112_PRIVATE && typeof window.CHEM112_PRIVATE.onQuitUploadIfCompleted === "function" ? window.CHEM112_PRIVATE.onQuitUploadIfCompleted : async()=>({ok:false,reason:"no_uploader"}))(psychoJS, isCompleted); }
   } catch(e) { console.warn('[CHEM112] onQuitUploadIfCompleted warn:', e); }
   // Check for and save orphaned data
-  if (psychoJS.experiment.isEntryEmpty()) {
-    psychoJS.experiment.nextEntry();
-  }
+  if (!psychoJS.experiment.isEntryEmpty()) { psychoJS.experiment.nextEntry(); }
   psychoJS.window.close();
   psychoJS.quit({message: message, isCompleted: isCompleted});
   
