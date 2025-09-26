@@ -1,11 +1,6 @@
-// private/uploader.js (HOTFIX)
-// Implements window.CHEM112_PRIVATE.* expected by CHEM112 SRP Study V3.js:
-//   - patchExperiment(psychoJS)
-//   - setExpInfo(student, week)
-//   - onQuitUploadIfCompleted(psychoJS, isCompleted)  <-- new (was missing)
-//
-// It collects trial rows by intercepting ExperimentHandler.addData/nextEntry
-// and posts a CSV to /api/ingest when the experiment quits AND isCompleted === true.
+
+// private/uploader.js (HOTFIX v2)
+// Adds pending-row flush on quit so rows aren't lost if nextEntry() wasn't called after last trial.
 
 (function(){
   const CFG = (typeof window.CHEM112_CONFIG !== "undefined") ? window.CHEM112_CONFIG : {
@@ -25,13 +20,36 @@
     student: "",
     week: "",
     rows: [],
-    _pending: Object.create(null)
+    _pending: Object.create(null),
+    _expInfo: {}
   };
+
+  function hasTrialishFields(map){
+    return ("response_raw" in map) || ("accuracy" in map) ||
+           ("topic" in map) || ("prompt_text" in map) || ("item_id" in map);
+  }
 
   function getWeekFromExpInfo(expInfo) {
     const w = (expInfo?.['Week (4, 5, 6, 7, 8, or 10)'] ?? '').toString();
     const m = w.match(/\d+/);
     return m ? parseInt(m[0], 10) : "";
+  }
+
+  function pushRowFromPending(){
+    if (!hasTrialishFields(state._pending)) return false;
+    const stamp = new Date().toISOString();
+    const sn = state.student || (state._expInfo?.['Student Number'] ?? "");
+    const wk = state.week || getWeekFromExpInfo(state._expInfo);
+    const row = HEADERS.map(h => {
+      switch(h){
+        case "timestamp": return stamp;
+        case "student_number": return sn;
+        case "week": return wk;
+        default: return (h in state._pending) ? state._pending[h] : "";
+      }
+    });
+    state.rows.push(row);
+    return true;
   }
 
   function toCSV(headers, rowArrays){
@@ -71,41 +89,20 @@
         const eh = psychoJS?.experiment;
         if (!eh) return;
 
-        const expInfo = psychoJS?.expInfo || psychoJS?.experiment?.extraInfo || {};
+        state._expInfo = psychoJS?.expInfo || psychoJS?.experiment?.extraInfo || {};
 
         const origAddData = eh.addData.bind(eh);
         const origNextEntry = eh.nextEntry.bind(eh);
 
         eh.addData = function(key, val){
-          // keep original behavior
           origAddData(key, val);
-          // stage values for current trial row
           state._pending[key] = val;
         };
 
         eh.nextEntry = function(snapshot){
-          const hasTrialishFields =
-            ("response_raw" in state._pending) ||
-            ("accuracy" in state._pending) ||
-            ("topic" in state._pending) ||
-            ("prompt_text" in state._pending);
-
-          if (hasTrialishFields) {
-            const stamp = new Date().toISOString();
-            const sn = state.student || (expInfo?.['Student Number'] ?? "");
-            const wk = state.week || getWeekFromExpInfo(expInfo);
-
-            const row = HEADERS.map(h => {
-              switch(h){
-                case "timestamp": return stamp;
-                case "student_number": return sn;
-                case "week": return wk;
-                default: return (h in state._pending) ? state._pending[h] : "";
-              }
-            });
-            state.rows.push(row);
-          }
-
+          // if a trial row is staged, convert it into a CSV row now
+          pushRowFromPending();
+          // clear pending map for next entry
           state._pending = Object.create(null);
           return origNextEntry(snapshot);
         };
@@ -115,7 +112,6 @@
       }
     },
 
-    // NEW: called by CHEM112 SRP Study V3.js at quit time
     async onQuitUploadIfCompleted(psychoJS, isCompleted){
       if (CFG.UPLOAD_ON_QUIT === false) {
         console.log("[CHEM112_PRIVATE] Upload disabled by config.");
@@ -125,6 +121,9 @@
         console.log("[CHEM112_PRIVATE] Not completed; skipping upload.");
         return { ok:false, skipped:true, reason:"not_completed" };
       }
+      // Flush any pending trial row (PsychoJS may not call nextEntry before quit)
+      try { pushRowFromPending(); } catch(_) {}
+
       try{
         const out = await uploadCSV();
         console.log("[CHEM112_PRIVATE] Upload result:", out);
