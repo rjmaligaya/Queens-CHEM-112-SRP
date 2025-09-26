@@ -1,6 +1,11 @@
-// private/uploader.js
-// Collects trial rows from PsychoJS and posts a CSV to Cloudflare Pages Function at /api/ingest.
-// Requires: private/config.js to be loaded first.
+// private/uploader.js (HOTFIX)
+// Implements window.CHEM112_PRIVATE.* expected by CHEM112 SRP Study V3.js:
+//   - patchExperiment(psychoJS)
+//   - setExpInfo(student, week)
+//   - onQuitUploadIfCompleted(psychoJS, isCompleted)  <-- new (was missing)
+//
+// It collects trial rows by intercepting ExperimentHandler.addData/nextEntry
+// and posts a CSV to /api/ingest when the experiment quits AND isCompleted === true.
 
 (function(){
   const CFG = (typeof window.CHEM112_CONFIG !== "undefined") ? window.CHEM112_CONFIG : {
@@ -57,7 +62,6 @@
 
   window.CHEM112_PRIVATE = {
     setExpInfo(student, week){
-      // Called by the experiment after DlgFromDict validation
       state.student = (student || "").toString();
       state.week = (week || "").toString();
     },
@@ -67,21 +71,19 @@
         const eh = psychoJS?.experiment;
         if (!eh) return;
 
-        // Remember expInfo for fallback week/student
         const expInfo = psychoJS?.expInfo || psychoJS?.experiment?.extraInfo || {};
 
         const origAddData = eh.addData.bind(eh);
         const origNextEntry = eh.nextEntry.bind(eh);
 
         eh.addData = function(key, val){
-          // mirror original behavior
+          // keep original behavior
           origAddData(key, val);
-          // collect for this pending row
+          // stage values for current trial row
           state._pending[key] = val;
         };
 
         eh.nextEntry = function(snapshot){
-          // If a trial just ended (valid response), required fields will exist.
           const hasTrialishFields =
             ("response_raw" in state._pending) ||
             ("accuracy" in state._pending) ||
@@ -90,8 +92,6 @@
 
           if (hasTrialishFields) {
             const stamp = new Date().toISOString();
-
-            // ensure identity fields
             const sn = state.student || (expInfo?.['Student Number'] ?? "");
             const wk = state.week || getWeekFromExpInfo(expInfo);
 
@@ -106,7 +106,6 @@
             state.rows.push(row);
           }
 
-          // clear pending map for next entry
           state._pending = Object.create(null);
           return origNextEntry(snapshot);
         };
@@ -116,10 +115,15 @@
       }
     },
 
-    async onQuit(){
+    // NEW: called by CHEM112 SRP Study V3.js at quit time
+    async onQuitUploadIfCompleted(psychoJS, isCompleted){
       if (CFG.UPLOAD_ON_QUIT === false) {
         console.log("[CHEM112_PRIVATE] Upload disabled by config.");
         return { ok:false, skipped:true };
+      }
+      if (!isCompleted) {
+        console.log("[CHEM112_PRIVATE] Not completed; skipping upload.");
+        return { ok:false, skipped:true, reason:"not_completed" };
       }
       try{
         const out = await uploadCSV();
