@@ -1,136 +1,136 @@
-// Minimal uploader & CSV builder that monkey-patches PsychoJS ExperimentHandler
+// private/uploader.js
+// Collects trial rows from PsychoJS and posts a CSV to Cloudflare Pages Function at /api/ingest.
+// Requires: private/config.js to be loaded first.
+
 (function(){
-  const cfg = window.CHEM112_CONFIG || {};
-  const state = {
-    currentRow: {},
-    rows: [],
-    columns: [],   // first-seen order
-    expInfo: null
+  const CFG = (typeof window.CHEM112_CONFIG !== "undefined") ? window.CHEM112_CONFIG : {
+    INGEST_URL: "/api/ingest",
+    REQUIRE_DIGITS: 8,
+    ALLOWED_WEEKS: [4,5,6,7,8,10],
+    UPLOAD_ON_QUIT: true
   };
 
-  function addColumn(key){
-    if (!state.columns.includes(key)) state.columns.push(key);
+  const HEADERS = [
+    "timestamp","student_number","week",
+    "topic","subtype","item_id","image_file","prompt_text","correct_answer",
+    "response_raw","response_norm","rt","accuracy"
+  ];
+
+  const state = {
+    student: "",
+    week: "",
+    rows: [],
+    _pending: Object.create(null)
+  };
+
+  function getWeekFromExpInfo(expInfo) {
+    const w = (expInfo?.['Week (4, 5, 6, 7, 8, or 10)'] ?? '').toString();
+    const m = w.match(/\d+/);
+    return m ? parseInt(m[0], 10) : "";
   }
 
-  function setCell(key, value){
-    addColumn(key);
-    state.currentRow[key] = (value === undefined || value === null) ? '' : String(value);
+  function toCSV(headers, rowArrays){
+    const esc = (s) => ('"' + String(s).replaceAll('"','""') + '"');
+    const head = headers.map(esc).join(',');
+    const body = rowArrays.map(r => r.map(esc).join(',')).join('\n');
+    return head + '\n' + body + '\n';
   }
 
-  // Resolve endpoint based on config and host
-  function resolveEndpoint(){
-    const choice = (cfg.ENDPOINT || 'auto').toLowerCase();
-    if (choice === 'node')   return cfg.ENDPOINTS.node;
-    if (choice === 'php')    return cfg.ENDPOINTS.php;
-    if (choice === 'netlify')return cfg.ENDPOINTS.netlify;
-    // auto: try node first, then php, then netlify (client will just POST; server availability is deployment-dependent)
-    return cfg.ENDPOINTS.node;
-  }
-
-  // Construct CSV text with stable column order
-  function buildCSV(){
-    // Ensure student/week are included
-    if (state.expInfo){
-      addColumn('Student Number');
-      addColumn('Week');
-    }
-    const header = state.columns.join(',');
-    const lines = [header];
-    for (const r of state.rows){
-      // Merge expInfo augmentation
-      let row = {...r};
-      if (state.expInfo){
-        row['Student Number'] = state.expInfo.studentNumber;
-        row['Week'] = state.expInfo.week;
-      }
-      const values = state.columns.map(k => {
-        let v = row[k];
-        if (v === undefined || v === null) v = '';
-        // Escape CSV
-        v = String(v);
-        if (/[",\n]/.test(v)) v = '"' + v.replace(/"/g,'""') + '"';
-        return v;
-      });
-      lines.push(values.join(','));
-    }
-    return lines.join('\n');
-  }
-
-  async function postCSV(filename, csvText){
-    const endpoint = resolveEndpoint();
-    const body = JSON.stringify({
-      filename,
-      contentType: 'text/csv',
-      data: csvText
+  async function uploadCSV(){
+    if (!state.rows.length) return { ok:false, reason: "no_rows" };
+    const url = (CFG.INGEST_URL || "/api/ingest")
+      + `?student=${encodeURIComponent(state.student||"")}`
+      + `&week=${encodeURIComponent(state.week||"")}`;
+    const csv = toCSV(HEADERS, state.rows);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: csv
     });
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body
-    });
-    if (!res.ok) throw new Error('Upload failed: ' + res.status);
-    return res.json().catch(()=>({ok:true}));
+    if (!res.ok) {
+      let msg = "";
+      try { msg = await res.text(); } catch(e){}
+      throw new Error("Upload failed: " + res.status + " " + msg);
+    }
+    return await res.json();
   }
 
-  // Public API exposed for the module script to call
   window.CHEM112_PRIVATE = {
+    setExpInfo(student, week){
+      // Called by the experiment after DlgFromDict validation
+      state.student = (student || "").toString();
+      state.week = (week || "").toString();
+    },
+
     patchExperiment(psychoJS){
-      const exp = psychoJS.experiment;
-      if (!exp || exp.__chem112_patched) return;
-      exp.__chem112_patched = true;
-
-      const origAdd = exp.addData.bind(exp);
-      const origNext = exp.nextEntry.bind(exp);
-
-      exp.addData = function(key, val){
-        try { setCell(key, val); } catch(e){ console.warn('[CHEM112] addData patch warn:', e); }
-        return origAdd(key, val);
-      };
-
-      exp.nextEntry = function(){
-        try {
-          // finalize current row
-          const snapshot = {...state.currentRow};
-          state.rows.push(snapshot);
-          state.currentRow = {};
-        } catch(e){ console.warn('[CHEM112] nextEntry patch warn:', e); }
-        return origNext();
-      };
-
-      console.log('[CHEM112] ExperimentHandler patched for private upload.');
-    },
-
-    setExpInfo(studentNumber, week){
-      state.expInfo = { studentNumber, week };
-    },
-
-    async onQuitUploadIfCompleted(psychoJS, isCompleted){
-      if (!isCompleted) return;
-      // Validate fields
-      const sn = (state.expInfo?.studentNumber || '').trim();
-      const wk = String(state.expInfo?.week || '').trim();
-      const digits = (cfg.REQUIRE_DIGITS|0) || 8;
-      if (!/^\d+$/.test(sn) || sn.length !== digits){
-        console.warn('[CHEM112] Not uploading: invalid student number.');
-        return;
-      }
-      if (!cfg.ALLOWED_WEEKS || !cfg.ALLOWED_WEEKS.map(String).includes(wk)){
-        console.warn('[CHEM112] Not uploading: invalid week.');
-        return;
-      }
-      const csv = buildCSV();
-      const today = new Date();
-      const yyyy = today.getFullYear();
-      const mm = String(today.getMonth()+1).padStart(2,'0');
-      const dd = String(today.getDate()).padStart(2,'0');
-      const filename = `CHEM112 SRP_${sn}_${wk}_${yyyy}-${mm}-${dd}.csv`;
-
       try {
-        await postCSV(filename, csv);
-        console.log('[CHEM112] Upload success:', filename);
-      } catch(err){
-        console.error('[CHEM112] Upload failed:', err);
+        const eh = psychoJS?.experiment;
+        if (!eh) return;
+
+        // Remember expInfo for fallback week/student
+        const expInfo = psychoJS?.expInfo || psychoJS?.experiment?.extraInfo || {};
+
+        const origAddData = eh.addData.bind(eh);
+        const origNextEntry = eh.nextEntry.bind(eh);
+
+        eh.addData = function(key, val){
+          // mirror original behavior
+          origAddData(key, val);
+          // collect for this pending row
+          state._pending[key] = val;
+        };
+
+        eh.nextEntry = function(snapshot){
+          // If a trial just ended (valid response), required fields will exist.
+          const hasTrialishFields =
+            ("response_raw" in state._pending) ||
+            ("accuracy" in state._pending) ||
+            ("topic" in state._pending) ||
+            ("prompt_text" in state._pending);
+
+          if (hasTrialishFields) {
+            const stamp = new Date().toISOString();
+
+            // ensure identity fields
+            const sn = state.student || (expInfo?.['Student Number'] ?? "");
+            const wk = state.week || getWeekFromExpInfo(expInfo);
+
+            const row = HEADERS.map(h => {
+              switch(h){
+                case "timestamp": return stamp;
+                case "student_number": return sn;
+                case "week": return wk;
+                default: return (h in state._pending) ? state._pending[h] : "";
+              }
+            });
+            state.rows.push(row);
+          }
+
+          // clear pending map for next entry
+          state._pending = Object.create(null);
+          return origNextEntry(snapshot);
+        };
+
+      } catch(e){
+        console.warn("[CHEM112_PRIVATE] patchExperiment failed:", e);
       }
-    }
+    },
+
+    async onQuit(){
+      if (CFG.UPLOAD_ON_QUIT === false) {
+        console.log("[CHEM112_PRIVATE] Upload disabled by config.");
+        return { ok:false, skipped:true };
+      }
+      try{
+        const out = await uploadCSV();
+        console.log("[CHEM112_PRIVATE] Upload result:", out);
+        return out;
+      } catch(err){
+        console.error("[CHEM112_PRIVATE] Upload error:", err);
+        return { ok:false, error: String(err) };
+      }
+    },
+
+    _debug: { state, HEADERS }
   };
 })();
